@@ -52,6 +52,20 @@ sys_sbrk(void)
   return addr;
 }
 
+// count the free memory
+uint64
+sys_memcnt(void)
+{
+        int grown_by = 0;
+        while (growproc(1) >= 0){
+                grown_by++;
+        }
+        if (growproc(-grown_by) < 0){
+                return -1;
+        }
+        return grown_by++;
+}
+
 uint64
 sys_sleep(void)
 {

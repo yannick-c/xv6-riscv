@@ -2720,6 +2720,12 @@ countfree()
   return n;
 }
 
+void
+memcnttest()
+{
+  printf("%d\n", memcnt());
+  exit(0);
+}
 // run each test in its own process. run returns 1 if child's exit()
 // indicates success.
 int
@@ -2825,6 +2831,7 @@ main(int argc, char *argv[])
     {dirfile, "dirfile"},
     {iref, "iref"},
     {forktest, "forktest"},
+    {memcnttest, "memcnttest"},
     {bigdir, "bigdir"}, // slow
     { 0, 0},
   };
