@@ -429,3 +429,33 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+char *pad_with_periods(int to_pad){
+  if (to_pad < 10){ return ".."; }
+  if (to_pad < 100) {return "."; }
+  return "";
+}
+
+void recurse_vmprint(pagetable_t pagetable, int level){
+  // take freewalk code as inspiration
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if (pte & PTE_V){
+      for (int j=0; j<level; j++){
+        printf(".. ");
+      }
+      printf("%s%d: pte 0x%p pa 0x%p\n", pad_with_periods(i), i, pte, PTE2PA(pte));
+      if((pte & (PTE_R|PTE_W|PTE_X)) == 0){
+        // this PTE points to a lower-level page table.
+        uint64 child = PTE2PA(pte);
+        recurse_vmprint((pagetable_t)child, level+1);
+      }
+    }
+  }
+}
+
+void
+vmprint(pagetable_t pagetable){
+  printf("page table 0x%p\n", PTE2PA(pagetable[0]));
+  recurse_vmprint(pagetable, 0);
+}
