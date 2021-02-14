@@ -18,6 +18,7 @@ struct spinlock pid_lock;
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
+extern char etext[];  // kernel.ld sets this to end of kernel code.
 extern char trampoline[]; // trampoline.S
 
 // helps ensure that wakeups of wait()ing
@@ -36,7 +37,7 @@ proc_mapstacks(pagetable_t kpgtbl) {
   for(p = proc; p < &proc[NPROC]; p++) {
     char *pa = kalloc();
     if(pa == 0)
-      panic("kalloc");
+      panic("proc_mapstacks: kalloc");
     uint64 va = KSTACK((int) (p - proc));
     kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
   }
@@ -97,6 +98,65 @@ allocpid() {
   return pid;
 }
 
+// Start Kernel pagetable utility functions for allocproc (direct copy from
+// kvminit from kernel/vm.c)
+// Make a direct-map page table for the kernel.
+pagetable_t
+proc_kvmmake(void)
+{
+  pagetable_t kpgtbl = uvmcreate();
+
+  // uart registers
+  if(mappages(kpgtbl, UART0, PGSIZE, UART0, PTE_R | PTE_X | PTE_W) < 0){
+    uvmfree(kpgtbl, 0);
+    panic("proc_kvmmake");
+    return 0;
+  }
+
+  // virtio mmio disk interface
+  if(mappages(kpgtbl, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_X | PTE_W) < 0){
+          uvmfree(kpgtbl, 0);
+          panic("proc_kvmmake");
+          return 0;
+  }
+
+  // PLIC
+  if(mappages(kpgtbl, PLIC, 0x400000, PLIC, PTE_R | PTE_X | PTE_W) < 0){
+          uvmfree(kpgtbl, 0);
+          panic("proc_kvmmake");
+          return 0;
+  }
+
+  // map kernel text
+  if(mappages(kpgtbl, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X | PTE_W) < 0){
+          uvmfree(kpgtbl, 0);
+          panic("proc_kvmmake");
+          return 0;
+  }
+
+
+  // map kernel data and the physical RAM we'll make use of.
+  if(mappages(kpgtbl, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W | PTE_X) < 0){
+          uvmfree(kpgtbl, 0);
+          panic("proc_kvmmake");
+          return 0;
+  }
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  if(mappages(kpgtbl, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X | PTE_W) < 0){
+          uvmfree(kpgtbl, 0);
+          panic("proc_kvmmake");
+          return 0;
+  }
+
+
+  /* // map kernel stacks */
+  /* proc_mapstacks(kpgtbl); */
+  
+  return kpgtbl;
+}
+
 // Look in the process table for an UNUSED proc.
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
@@ -127,6 +187,9 @@ found:
     return 0;
   }
 
+  // A kernel page table
+  p->kpagetable = proc_kvmmake();
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -141,6 +204,8 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  printf("process kpagetable:\n");
+  vmprint(p->kpagetable);
   return p;
 }
 
