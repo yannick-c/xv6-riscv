@@ -53,7 +53,6 @@ procinit(void)
   initlock(&wait_lock, "wait_lock");
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
-      p->kstack = KSTACK((int) (p - proc));
   }
 }
 
@@ -115,45 +114,41 @@ proc_kvmmake(void)
 
   // virtio mmio disk interface
   if(mappages(kpgtbl, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_X | PTE_W) < 0){
-          uvmfree(kpgtbl, 0);
-          panic("proc_kvmmake");
-          return 0;
+    uvmfree(kpgtbl, 0);
+    panic("proc_kvmmake");
+    return 0;
   }
 
   // PLIC
   if(mappages(kpgtbl, PLIC, 0x400000, PLIC, PTE_R | PTE_X | PTE_W) < 0){
-          uvmfree(kpgtbl, 0);
-          panic("proc_kvmmake");
-          return 0;
+    uvmfree(kpgtbl, 0);
+    panic("proc_kvmmake");
+    return 0;
   }
 
   // map kernel text
   if(mappages(kpgtbl, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X | PTE_W) < 0){
-          uvmfree(kpgtbl, 0);
-          panic("proc_kvmmake");
-          return 0;
+    uvmfree(kpgtbl, 0);
+    panic("proc_kvmmake");
+    return 0;
   }
 
 
   // map kernel data and the physical RAM we'll make use of.
   if(mappages(kpgtbl, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W | PTE_X) < 0){
-          uvmfree(kpgtbl, 0);
-          panic("proc_kvmmake");
-          return 0;
+    uvmfree(kpgtbl, 0);
+    panic("proc_kvmmake");
+    return 0;
   }
 
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
   if(mappages(kpgtbl, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X | PTE_W) < 0){
-          uvmfree(kpgtbl, 0);
-          panic("proc_kvmmake");
-          return 0;
+    uvmfree(kpgtbl, 0);
+    panic("proc_kvmmake");
+    return 0;
   }
 
-
-  /* // map kernel stacks */
-  /* proc_mapstacks(kpgtbl); */
-  
   return kpgtbl;
 }
 
@@ -198,13 +193,22 @@ found:
     return 0;
   }
 
+  // Following Figure 3.3 in the book we want to allocate the kernel stack
+  // pages below the trampoline, note that it grows down as opposed to user
+  // stack, allocate two pages with guard page
+  uint64 ksp = TRAMPOLINE - 2*PGSIZE;
+
+  char *pa = kalloc();
+  memset(pa, 0, PGSIZE);
+  mappages(p->kpagetable, ksp, PGSIZE, (uint64)pa, PTE_W|PTE_R|PTE_X);
+  p->kstack = ksp;
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
-  p->context.sp = p->kstack + PGSIZE;
+  p->context.sp = ksp + PGSIZE;
 
-  printf("process kpagetable:\n");
   vmprint(p->kpagetable);
   return p;
 }
@@ -512,7 +516,12 @@ scheduler(void)
 
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
+
       if(p->state == RUNNABLE) {
+        // Change reference kernel pagetable
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
+
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
