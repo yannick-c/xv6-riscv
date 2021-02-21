@@ -244,10 +244,13 @@ freeproc(struct proc *p)
     proc_freepagetable(p->pagetable, p->sz);
 
   if(p->kpagetable){
+    if(p->ksz>0)
+      uvmunmap(p->kpagetable, p->kstack, 1, 1);
     freewalk(p->kpagetable,0);
   }
   p->pagetable = 0;
   p->sz = 0;
+  p->ksz = 0;
   p->pid = 0;
   p->parent = 0;
   p->name[0] = 0;
