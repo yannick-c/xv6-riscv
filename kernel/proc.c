@@ -245,6 +245,7 @@ freeproc(struct proc *p)
 
   if(p->kpagetable){
     if(p->ksz>0)
+      // kstack is just size one
       uvmunmap(p->kpagetable, p->kstack, 1, 1);
     freewalk(p->kpagetable,0);
   }
