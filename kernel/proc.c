@@ -107,49 +107,65 @@ proc_kvmmake(void)
 
   // uart registers
   if(mappages(kpgtbl, UART0, PGSIZE, UART0, PTE_R | PTE_X | PTE_W) < 0){
-    uvmfree(kpgtbl, 0);
-    panic("proc_kvmmake");
-    return 0;
+    goto bad_proc_kvmmake;
   }
 
   // virtio mmio disk interface
   if(mappages(kpgtbl, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_X | PTE_W) < 0){
-    uvmfree(kpgtbl, 0);
-    panic("proc_kvmmake");
-    return 0;
+    goto bad_proc_kvmmake;
   }
 
   // PLIC
   if(mappages(kpgtbl, PLIC, 0x400000, PLIC, PTE_R | PTE_X | PTE_W) < 0){
-    uvmfree(kpgtbl, 0);
-    panic("proc_kvmmake");
-    return 0;
+    goto bad_proc_kvmmake;
   }
 
   // map kernel text
   if(mappages(kpgtbl, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X | PTE_W) < 0){
-    uvmfree(kpgtbl, 0);
-    panic("proc_kvmmake");
-    return 0;
+    goto bad_proc_kvmmake;
   }
 
 
   // map kernel data and the physical RAM we'll make use of.
   if(mappages(kpgtbl, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W | PTE_X) < 0){
-    uvmfree(kpgtbl, 0);
-    panic("proc_kvmmake");
-    return 0;
+    goto bad_proc_kvmmake;
   }
 
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
   if(mappages(kpgtbl, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X | PTE_W) < 0){
-    uvmfree(kpgtbl, 0);
-    panic("proc_kvmmake");
-    return 0;
+    goto bad_proc_kvmmake;
   }
 
   return kpgtbl;
+
+bad_proc_kvmmake:
+  uvmfree(kpgtbl, 0, 1);
+  panic("proc_kvmmake");
+  return 0;
+}
+
+// Calculate the size of the kernel page table after initialization with
+// proc_kvmmake as it is calculated in mappages
+uint64
+proc_ksz_init(void)
+{
+  uint64 ksz = 0;
+
+  ksz += PGROUNDDOWN(UART0+PGSIZE-1)-PGROUNDDOWN(UART0);
+
+  ksz += PGROUNDDOWN(VIRTIO0+PGSIZE-1) - PGROUNDDOWN(VIRTIO0);
+
+  ksz += PGROUNDDOWN(PLIC+0x400000-1) - PGROUNDDOWN(PLIC);
+
+  ksz += PGROUNDDOWN((uint64)etext-1) - PGROUNDDOWN((uint64)etext-KERNBASE);
+
+
+  ksz += PGROUNDDOWN(PHYSTOP-1) - PGROUNDDOWN(PHYSTOP-(uint64)etext);
+
+  ksz += PGROUNDDOWN(TRAMPOLINE+PGSIZE-1) - PGROUNDDOWN(TRAMPOLINE);
+
+  return ksz;
 }
 
 // Look in the process table for an UNUSED proc.
@@ -184,6 +200,7 @@ found:
 
   // A kernel page table
   p->kpagetable = proc_kvmmake();
+  p->ksz = proc_ksz_init();
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
@@ -202,6 +219,7 @@ found:
   memset(pa, 0, PGSIZE);
   mappages(p->kpagetable, ksp, PGSIZE, (uint64)pa, PTE_W|PTE_R|PTE_X);
   p->kstack = ksp;
+  p->ksz++;
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -209,7 +227,7 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = ksp + PGSIZE;
 
-  vmprint(p->kpagetable);
+  /* vmprint(p->kpagetable); */
   return p;
 }
 
@@ -224,6 +242,10 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+
+  if(p->kpagetable){
+    freewalk(p->kpagetable,0);
+  }
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -253,7 +275,7 @@ proc_pagetable(struct proc *p)
   // to/from user space, so not PTE_U.
   if(mappages(pagetable, TRAMPOLINE, PGSIZE,
               (uint64)trampoline, PTE_R | PTE_X) < 0){
-    uvmfree(pagetable, 0);
+    uvmfree(pagetable, 0, 1);
     return 0;
   }
 
@@ -261,7 +283,7 @@ proc_pagetable(struct proc *p)
   if(mappages(pagetable, TRAPFRAME, PGSIZE,
               (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
-    uvmfree(pagetable, 0);
+    uvmfree(pagetable, 0, 1);
     return 0;
   }
 
@@ -275,7 +297,7 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
-  uvmfree(pagetable, sz);
+  uvmfree(pagetable, sz, 1);
 }
 
 // a user program that calls exec("/init")
